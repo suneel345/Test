@@ -1,0 +1,53 @@
+pipeline {
+  agent any
+
+  environment {
+    # Cost Explorer endpoint region
+    CE_REGION  = 'us-east-1'
+
+    # S3 / general region
+    AWS_REGION = 'ap-south-1'
+
+    ACCOUNT_ID = '222222222222'
+    CUR_BUCKET = 'dev-cur-billing-bucket'
+
+    # Jenkins agent uses this SSO profile or IAM creds for dev account
+    AWS_PROFILE = 'dev'
+  }
+
+  options {
+    timestamps()
+    ansiColor('xterm')
+  }
+
+  triggers {
+    // Run daily at ~01:00
+    cron('H 1 * * *')
+  }
+
+  stages {
+    stage('Prepare latest CE report for dev') {
+      steps {
+        sh '''
+          echo "Using AWS profile: ${AWS_PROFILE:-<default>}"
+          echo "Account   : $ACCOUNT_ID"
+          echo "Bucket    : $CUR_BUCKET"
+          echo "CE Region : $CE_REGION"
+          echo "S3 Region : $AWS_REGION"
+
+          chmod +x scripts/prepare_latest_ce_report.sh
+          scripts/prepare_latest_ce_report.sh
+        '''
+      }
+    }
+  }
+
+  post {
+    success {
+      echo 'Dev latest CE/Billing report ready ✅'
+    }
+    failure {
+      echo 'Dev latest CE/Billing report pipeline FAILED ❌'
+    }
+  }
+}
