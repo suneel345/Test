@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+AWS_REGION="${AWS_REGION:-ap-south-1}"
+ARCHIVE_BUCKET="${ARCHIVE_BUCKET:?ARCHIVE_BUCKET is required}"
+
+ACCOUNTS_AND_BUCKETS=(
+  "222222222222 dev-cur-billing-bucket"
+  "333333333333 dev2-cur-billing-bucket"
+  "444444444444 qa-cur-billing-bucket"
+  "555555555555 prod-cur-billing-bucket"
+)
+
+TODAY_DATE="$(date +%Y-%m-%d)"         # e.g. 2025-12-08
+TODAY_FOLDER="$(date +%Y-%b-%d | tr '[:lower:]' '[:upper:]')"  # 2025-DEC-08
+
+WORK_ROOT="tmp/central-ce-archive"
+mkdir -p "$WORK_ROOT"
+
+echo "=== Central CE Archive Job ==="
+aws sts get-caller-identity
+echo ""
+
+assume_role() {
+  local role_arn="$1"
+  local session_name="$2"
+  aws sts assume-role \
+    --role-arn "$role_arn" \
+    --role-session-name "$session_name" \
+    --duration-seconds 3600 \
+    --output json
+}
+
+process_account() {
+  local account_id="$1"
+  local cur_bucket="$2"
+
+  echo "--- Account: $account_id ---"
+
+  local role_arn="arn:aws:iam::${account_id}:role/BillingCurReadRole"
+  local creds_json=$(assume_role "$role_arn" "archive-${account_id}")
+
+  local AK SK TOK
+  AK=$(echo "$creds_json" | jq -r '.Credentials.AccessKeyId')
+  SK=$(echo "$creds_json" | jq -r '.Credentials.SecretAccessKey')
+  TOK=$(echo "$creds_json" | jq -r '.Credentials.SessionToken')
+
+  local acc_dir="${WORK_ROOT}/${account_id}"
+  mkdir -p "$acc_dir"
+
+  local src_key="latest/latest_ce.json"
+  local json_file="${acc_dir}/latest_ce.json"
+
+  AWS_ACCESS_KEY_ID="$AK" \
+  AWS_SECRET_ACCESS_KEY="$SK" \
+  AWS_SESSION_TOKEN="$TOK" \
+  aws s3 cp "s3://${cur_bucket}/${src_key}" "$json_file" --region "$AWS_REGION"
+
+  # ======== 1️⃣ Upload LATEST JSON to central bucket ========
+  local latest_dst="latest/${account_id}/latest.json"
+  aws s3 cp "$json_file" "s3://${ARCHIVE_BUCKET}/${latest_dst}" --region "$AWS_REGION"
+  echo "Uploaded latest JSON → s3://${ARCHIVE_BUCKET}/${latest_dst}"
+
+  # ======== 2️⃣ Archive as ZIP (central only) ========
+  local zip_path="${acc_dir}/${account_id}.zip"
+  (
+    cd "$acc_dir"
+    rm -f *.zip || true
+    zip -r "$(basename "$zip_path")" latest_ce.json >/dev/null
+  )
+
+  local archive_dst="archive/${TODAY_FOLDER}/${account_id}.zip"
+  aws s3 cp "$zip_path" "s3://${ARCHIVE_BUCKET}/${archive_dst}" --region "$AWS_REGION"
+  echo "Archived ZIP → s3://${ARCHIVE_BUCKET}/${archive_dst}"
+  echo ""
+}
+
+for entry in "${ACCOUNTS_AND_BUCKETS[@]}"; do
+  process_account $(echo "$entry")
+done
+
+echo "✔ Central CE archive complete"
