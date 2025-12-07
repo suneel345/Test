@@ -1,0 +1,42 @@
+pipeline {
+  agent {
+    label 'amr-cloud-serverless-stack'
+  }
+
+  environment {
+    // SSO profile configured on the EC2 agent
+    AWS_PROFILE       = 'infra-sso'
+
+    // Normal region where your infra bucket lives
+    AWS_REGION        = 'ap-southeast-1'
+    AWS_DEFAULT_REGION= 'ap-southeast-1'
+
+    // Central archive bucket in infra account
+    ARCHIVE_BUCKET    = 'reports'
+  }
+
+  triggers {
+    // Run nightly at ~03:00 (controller timezone)
+    cron('H 3 * * *')
+  }
+
+  stages {
+    stage('Archive CE to Infra') {
+      steps {
+        sh '''
+          set -euo pipefail
+
+          echo "Archive job running"
+          echo "Using AWS_PROFILE: ${AWS_PROFILE:-<none>}"
+          echo "Using AWS_REGION : ${AWS_REGION:-<none>}"
+
+          echo "=== Identity with SSO profile ==="
+          aws sts get-caller-identity --region "$AWS_REGION"
+
+          chmod +x scripts/archive_ce_to_central.sh
+          scripts/archive_ce_to_central.sh
+        '''
+      }
+    }
+  }
+}
