@@ -1,0 +1,26 @@
+pipeline {
+  agent any
+
+  environment {
+    AWS_REGION     = 'ap-south-1'
+    ARCHIVE_BUCKET = 'billing-archive-master'
+  }
+
+  triggers {
+    cron('H 3 * * *')
+  }
+
+  stages {
+    stage('Archive CE to Infra') {
+      steps {
+        sh '''
+          echo "Archive job running"
+          aws sts get-caller-identity --region "$AWS_REGION"
+
+          chmod +x scripts/archive_ce_to_central.sh
+          scripts/archive_ce_to_central.sh
+        '''
+      }
+    }
+  }
+}
